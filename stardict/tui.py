@@ -20,12 +20,14 @@ console = Console()
 LINE_KEYS = "1234567890abcdefghijklmnoprstuvwxyz"
 LINES_PER_PAGE = len(LINE_KEYS)
 HEADER_HELP = (
-    "← → : Prev/Next Dict  |  ↑ ↓ : Prev/Next Page  |  "
+    "← → : Prev/Next Dict  |  ↑ ↓ : Prev/Next Section  |  [ ] : Prev/Next Page  |  "
     "Space : Say Next  |  1-9,0,a-z : Say Line  |  ESC/Enter : Return  |  Q : Quit"
 )
 
 # Tags whose content is numberable (definition text and examples)
 _NUMBERABLE_TAGS = re.compile(r"<(dtrn|ex|blockquote)>(.*?)</\1>", re.DOTALL)
+# Ordinal pattern that marks the start of a new section (e.g. "1) ", "2. ", "♦ 1) ")
+_SECTION_ORDINAL = re.compile(r"^\s*(?:[♦►●•◆▶✓✗]\s*)?\d+[).]\s")
 # Inline tags converted to rich markup
 _INLINE_TAG_MAP = {
     "k":    ("[bold underline]", "[/bold underline]"),
@@ -124,6 +126,29 @@ def render_definition_lines(raw: str) -> list[tuple[bool, str]]:
                 result.append((is_num, line))
 
     return result
+
+
+def group_into_sections(
+    lines: list[tuple[bool, str]],
+) -> tuple[list[tuple[bool, str]], list[list[tuple[bool, str]]]]:
+    """
+    Split rendered lines into (preamble_lines, [section_lines, ...]).
+    Section boundaries are detected by ordinal markers at line start (e.g. "1) ", "2. ").
+    Lines before the first ordinal are the preamble (pronunciation, etc.).
+    If no ordinals found, returns ([], [lines]) — one section, no preamble.
+    """
+    section_starts = [
+        i for i, (_, line) in enumerate(lines)
+        if _SECTION_ORDINAL.match(_strip_rich(line))
+    ]
+    if not section_starts:
+        return [], [lines]
+    preamble = lines[: section_starts[0]]
+    sections = []
+    for j, start in enumerate(section_starts):
+        end = section_starts[j + 1] if j + 1 < len(section_starts) else len(lines)
+        sections.append(lines[start:end])
+    return preamble, sections
 
 
 def draw_header():
@@ -256,6 +281,7 @@ def _print_line(markup: str) -> None:
 
 def wait_for_navigation(results: list[tuple[str, str]]) -> None:
     current_dict = 0
+    current_section = 0
     current_page = 0
     total_dicts = len(results)
     status_msg = ""
@@ -286,11 +312,20 @@ def wait_for_navigation(results: list[tuple[str, str]]) -> None:
             console.print(f"[bold white]{headword}[/bold white]")
 
         all_lines = render_definition_lines(definition)
-        total_pages = max(1, (len(all_lines) + LINES_PER_PAGE - 1) // LINES_PER_PAGE)
+        preamble_lines, section_groups = group_into_sections(all_lines)
+
+        for _, line in preamble_lines:
+            _print_line(f"   {line}")
+
+        total_sections = max(1, len(section_groups))
+        current_section = min(current_section, total_sections - 1)
+
+        section_lines = section_groups[current_section]
+        total_pages = max(1, (len(section_lines) + LINES_PER_PAGE - 1) // LINES_PER_PAGE)
         current_page = min(current_page, total_pages - 1)
 
         start = current_page * LINES_PER_PAGE
-        page_lines = all_lines[start : start + LINES_PER_PAGE]
+        page_lines = section_lines[start : start + LINES_PER_PAGE]
 
         numbered_lines: list[str] = []
         key_idx = 0
@@ -303,12 +338,21 @@ def wait_for_navigation(results: list[tuple[str, str]]) -> None:
             else:
                 _print_line(f"   {line}")
 
-        if total_pages > 1:
-            console.print(
-                f"\n[dim]Page {current_page + 1}/{total_pages}  "
-                f"({'↑ prev  ' if current_page > 0 else ''}"
-                f"{'↓ next' if current_page < total_pages - 1 else ''})[/dim]"
+        nav_parts = []
+        if total_sections > 1:
+            nav_parts.append(
+                f"Section {current_section + 1}/{total_sections}  "
+                f"({'↑ prev  ' if current_section > 0 else ''}"
+                f"{'↓ next' if current_section < total_sections - 1 else ''})"
             )
+        if total_pages > 1:
+            nav_parts.append(
+                f"Page {current_page + 1}/{total_pages}  "
+                f"({'[ prev  ' if current_page > 0 else ''}"
+                f"{'] next' if current_page < total_pages - 1 else ''})"
+            )
+        if nav_parts:
+            console.print("\n[dim]" + "  |  ".join(nav_parts) + "[/dim]")
 
         if status_msg:
             console.print(f"\n[green]{status_msg}[/green]")
@@ -327,15 +371,23 @@ def wait_for_navigation(results: list[tuple[str, str]]) -> None:
         if key == readchar.key.RIGHT:
             stop_say(); space_idx = 0
             current_dict = min(current_dict + 1, total_dicts - 1)
-            current_page = 0
+            current_section = 0; current_page = 0
         elif key == readchar.key.LEFT:
             stop_say(); space_idx = 0
             current_dict = max(current_dict - 1, 0)
-            current_page = 0
+            current_section = 0; current_page = 0
         elif key == readchar.key.DOWN:
             stop_say(); space_idx = 0
-            current_page = min(current_page + 1, total_pages - 1)
+            current_section = min(current_section + 1, total_sections - 1)
+            current_page = 0
         elif key == readchar.key.UP:
+            stop_say(); space_idx = 0
+            current_section = max(current_section - 1, 0)
+            current_page = 0
+        elif key == "]":
+            stop_say(); space_idx = 0
+            current_page = min(current_page + 1, total_pages - 1)
+        elif key == "[":
             stop_say(); space_idx = 0
             current_page = max(current_page - 1, 0)
         elif key == " ":
@@ -359,7 +411,7 @@ def wait_for_navigation(results: list[tuple[str, str]]) -> None:
             if idx < len(numbered_lines):
                 say_proc = say_line(numbered_lines[idx])
                 if say_proc:
-                    status_msg = "Speaking..."
+                    status_msg = f"Speaking {key}..."
 
 
 def main():
