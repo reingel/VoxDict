@@ -199,7 +199,7 @@ def group_into_sections(
 def draw_header():
     console.print(
         Panel(
-            f"[bold cyan]StarDict[/bold cyan]\n[white]Multi-dictionary lookup[/white]\n\n"
+            f"[bold cyan]VoxDict[/bold cyan]\n[white]Multi-dictionary lookup[/white]\n\n"
             f"[dim white]{HEADER_HELP}[/dim white]"
         )
     )
