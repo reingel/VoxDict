@@ -20,24 +20,44 @@ console = Console()
 LINE_KEYS = "1234567890abcdefghijklmnoprstuvwxyz"
 LINES_PER_PAGE = len(LINE_KEYS)
 HEADER_HELP = (
-    "← → : Prev/Next Dict  |  ↑ ↓ : Prev/Next Section  |  [ ] : Prev/Next Page  |  "
-    "Space : Say Next  |  1-9,0,a-z : Say Line  |  ESC/Enter : Return  |  Q : Quit"
+    "← → : Prev/Next Dict  |  ↑ ↓ : Prev/Next Section  |  [ ] : Prev/Next Page\n"
+    "Space : Speak Next    |  1-0,a-z : Speak Line     |  ESC/Enter : Return\n"
+    "Q : Quit"
 )
 
 # Tags whose content is numberable (definition text and examples)
 _NUMBERABLE_TAGS = re.compile(r"<(dtrn|ex|blockquote)>(.*?)</\1>", re.DOTALL)
 # Ordinal pattern that marks the start of a new section (e.g. "1) ", "2. ", "♦ 1) ")
 _SECTION_ORDINAL = re.compile(r"^\s*(?:[♦►●•◆▶✓✗]\s*)?\d+[).]\s")
+# Word-relationship label (<b>Syn:</b>, <b>Ant:</b>, etc.) followed by kref/co items
+_SYNANT_RE = re.compile(
+    r"<b>([A-Za-z][^<]{0,40}?:)</b>\s*((?:<(?:kref|co)>[^<]*</(?:kref|co)>\s*(?:,\s*)?)+)",
+    re.DOTALL,
+)
+# Any remaining bold label ending with : (e.g. <b>Derived words:</b> with plain-text items)
+_RELABEL_RE = re.compile(r"<b>([A-Za-z][^<]{0,40}?:)</b>")
 # Inline tags converted to rich markup
 _INLINE_TAG_MAP = {
     "k":    ("[bold underline]", "[/bold underline]"),
-    "b":    ("[bold]",           "[/bold]"),
-    "i":    ("[italic]",         "[/italic]"),
+    "b":    ("[bold white]",      "[/bold white]"),
+    "i":    ("[italic green]",    "[/italic green]"),
     "tr":   ("[italic cyan]/",   "/[/italic cyan]"),
     "kref": ("[cyan]",           "[/cyan]"),
-    "abr":  ("[dim]",            "[/dim]"),
+    "abr":  ("[italic green]",   "[/italic green]"),
 }
 _PASSTHROUGH_TAGS = {"c", "co", "pos", "u", "s", "gr"}
+
+
+def _preprocess_synant(content: str) -> str:
+    """Colorize word-relationship labels and their items."""
+    def repl_kref(m: re.Match) -> str:
+        label = m.group(1)
+        items = re.findall(r"<(?:kref|co)>([^<]*)</(?:kref|co)>", m.group(2))
+        return f"\n[yellow]{label}[/yellow] [cyan]{', '.join(items)}[/cyan]\n"
+    content = _SYNANT_RE.sub(repl_kref, content)
+    # Make any remaining bold Label: (e.g. Derived words: with plain-text items) yellow
+    content = _RELABEL_RE.sub(lambda m: f"[yellow]{m.group(1)}[/yellow]", content)
+    return content
 
 
 def _strip_tags(text: str) -> str:
@@ -45,7 +65,10 @@ def _strip_tags(text: str) -> str:
 
 
 def _strip_rich(text: str) -> str:
-    return re.sub(r"\[/?[^\]]*\]", "", text)
+    text = text.replace(r"\[", "[")                  # unescape \[ → [
+    text = re.sub(r"\[/?[a-z][^\]]*\]", "", text)   # remove rich markup tags
+    text = text.replace("[", r"\[")                  # re-escape remaining [ (grammar notes)
+    return text
 
 
 def _escape_nonrich_brackets(text: str) -> str:
@@ -63,6 +86,11 @@ def _escape_nonrich_brackets(text: str) -> str:
     for i, tag in enumerate(saved):
         text = text.replace(f"\x02{i}\x03", tag)
     return text
+
+
+def _colorize_grammar_brackets(text: str) -> str:
+    """Wrap escaped \\[...\\] grammar-code patterns in italic green (e.g. [V n], [Also V n P])."""
+    return re.sub(r'\\\[([^\]]*)\]', r'[italic green]\[\1][/italic green]', text)
 
 
 def _apply_inline_tags(text: str) -> str:
@@ -113,13 +141,30 @@ def render_definition_lines(raw: str) -> list[tuple[bool, str]]:
 
     result: list[tuple[bool, str]] = []
     for is_num, content, tag in segments:
-        rich = _apply_inline_tags(content)
-        rich = _escape_nonrich_brackets(rich)
-
-        # Apply block-level dim for <ex>
+        content = _preprocess_synant(content)
         if tag == "ex":
-            lines_in = rich.split("\n")
-            rich = "\n".join(f"[dim]{l}[/dim]" if l.strip() else l for l in lines_in)
+            # Detect leading [grammar note] prefix at raw XML level
+            m_note = re.match(r"^\[([^\]]+)\]\s*(.*)", content, re.DOTALL)
+            if m_note:
+                note = _strip_tags(m_note.group(1)).strip()
+                sentence = _apply_inline_tags(m_note.group(2))
+                sentence = _escape_nonrich_brackets(sentence)
+                sentence = _colorize_grammar_brackets(sentence)
+                rich = f"[italic green]\\[{note}][/italic green][steel_blue1] {sentence}[/steel_blue1]"
+            else:
+                rich = _apply_inline_tags(content)
+                rich = _escape_nonrich_brackets(rich)
+                rich = _colorize_grammar_brackets(rich)
+                rich = f"[steel_blue1]{rich}[/steel_blue1]"
+        elif tag == "dtrn":
+            rich = _apply_inline_tags(content)
+            rich = _escape_nonrich_brackets(rich)
+            rich = _colorize_grammar_brackets(rich)
+            rich = f"[color(248)]{rich}[/color(248)]"
+        else:
+            rich = _apply_inline_tags(content)
+            rich = _escape_nonrich_brackets(rich)
+            rich = _colorize_grammar_brackets(rich)
 
         for line in rich.split("\n"):
             if line.strip():
@@ -154,7 +199,7 @@ def group_into_sections(
 def draw_header():
     console.print(
         Panel(
-            f"[bold white]StarDict[/bold white]\n[white]Multi-dictionary lookup[/white]\n\n"
+            f"[bold cyan]StarDict[/bold cyan]\n[white]Multi-dictionary lookup[/white]\n\n"
             f"[dim white]{HEADER_HELP}[/dim white]"
         )
     )
@@ -215,9 +260,9 @@ def _last_uniform_run(markup: str) -> str:
     if not runs:
         return ""
 
-    # Normalize: treat bold-only as plain (headword emphasis = same group as plain)
+    # Normalize: treat bold (incl. "bold white") as plain
     def _norm(style: frozenset) -> frozenset:
-        return style - {"bold"}
+        return frozenset(s for s in style if not s.startswith("bold"))
 
     # Style of the last non-whitespace run (normalized)
     last_style = next(
@@ -238,28 +283,19 @@ def _last_uniform_run(markup: str) -> str:
 
 def _clean_for_speech(markup: str) -> str:
     """Extract and clean text for TTS: last uniform-style run, stripped of grammar."""
-    text = _last_uniform_run(markup)
+    def _clean(text: str) -> str:
+        text = text.replace(r"\[", "[")
+        text = re.sub(r"^\s*[\(\[]?[0-9A-Za-z]{1,2}[\)\]\.]\s*", "", text)
+        text = re.sub(r"\b[A-Z]{3,}(?:-[A-Z]{2,})*\b", "", text)
+        text = re.sub(r"\[[^\]]{1,40}\]", "", text)
+        text = re.sub(r"<[A-Z]\s*>", "", text)
+        text = re.sub(r"[♦►●•◆▶✓✗\[\]]", "", text)
+        return re.sub(r"\s+", " ", text).strip()
 
-    # Unescape \[ \] back to literal brackets
-    text = text.replace(r"\[", "[")
-
-    # Remove leading ordinals: "1) ", "2. ", "A. ", "(i) ", etc.
-    text = re.sub(r"^\s*[\(\[]?[0-9A-Za-z]{1,2}[\)\]\.]\s*", "", text)
-
-    # Remove grammar labels in ALL-CAPS (3+ chars, may be hyphenated): VERB, CONJ-SUBORD
-    text = re.sub(r"\b[A-Z]{3,}(?:-[A-Z]{2,})*\b", "", text)
-
-    # Remove bracketed grammar/style notes (≤40 chars): [V n], [INFORMAL], [also V n]
-    text = re.sub(r"\[[^\]]{1,40}\]", "", text)
-
-    # Remove angle-bracket markers like <E >, <Ex>
-    text = re.sub(r"<[A-Z]\s*>", "", text)
-
-    # Remove bullet/marker characters
-    text = re.sub(r"[♦►●•◆▶✓✗]", "", text)
-
-    # Collapse whitespace
-    text = re.sub(r"\s+", " ", text).strip()
+    text = _clean(_last_uniform_run(markup))
+    if not text:
+        # fallback: strip all rich markup and clean the full line
+        text = _clean(_strip_rich(markup))
     return text
 
 
@@ -274,9 +310,9 @@ def say_line(text: str) -> subprocess.Popen | None:
 
 def _print_line(markup: str) -> None:
     try:
-        console.print(markup)
+        console.print(markup, highlight=False)
     except Exception:
-        console.print(_strip_rich(markup))
+        console.print(_strip_rich(markup), highlight=False)
 
 
 def wait_for_navigation(results: list[tuple[str, str]]) -> None:
@@ -320,23 +356,37 @@ def wait_for_navigation(results: list[tuple[str, str]]) -> None:
         total_sections = max(1, len(section_groups))
         current_section = min(current_section, total_sections - 1)
 
-        section_lines = section_groups[current_section]
-        total_pages = max(1, (len(section_lines) + LINES_PER_PAGE - 1) // LINES_PER_PAGE)
-        current_page = min(current_page, total_pages - 1)
-
-        start = current_page * LINES_PER_PAGE
-        page_lines = section_lines[start : start + LINES_PER_PAGE]
+        # Compute 3-section window (clamp at boundaries)
+        win_start = current_section - 1
+        win_start = max(0, min(win_start, total_sections - 3))
+        win_indices = list(range(win_start, min(win_start + 3, total_sections)))
 
         numbered_lines: list[str] = []
-        key_idx = 0
-        for is_num, line in page_lines:
-            if is_num:
-                label = LINE_KEYS[key_idx] if key_idx < len(LINE_KEYS) else " "
-                key_idx += 1
-                numbered_lines.append(line)
-                _print_line(f"[dim]{label}[/dim]  {line}")
+        total_pages = 1
+
+        for sec_idx in win_indices:
+            is_current = (sec_idx == current_section)
+            console.rule(style="cyan" if is_current else "dim")
+
+            if is_current:
+                section_lines = section_groups[sec_idx]
+                total_pages = max(1, (len(section_lines) + LINES_PER_PAGE - 1) // LINES_PER_PAGE)
+                current_page = min(current_page, total_pages - 1)
+                start = current_page * LINES_PER_PAGE
+                page_lines = section_lines[start : start + LINES_PER_PAGE]
+
+                key_idx = 0
+                for is_num, line in page_lines:
+                    if is_num:
+                        label = LINE_KEYS[key_idx] if key_idx < len(LINE_KEYS) else " "
+                        key_idx += 1
+                        numbered_lines.append(line)
+                        _print_line(f"[dim]{label}[/dim]  {line}")
+                    else:
+                        _print_line(f"   {line}")
             else:
-                _print_line(f"   {line}")
+                for _, line in section_groups[sec_idx]:
+                    _print_line(f"[dim]   {_strip_rich(line)}[/dim]")
 
         nav_parts = []
         if total_sections > 1:
