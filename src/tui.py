@@ -65,9 +65,9 @@ def _strip_tags(text: str) -> str:
 
 
 def _strip_rich(text: str) -> str:
-    text = text.replace(r"\[", "[")                  # unescape \[ → [
-    text = re.sub(r"\[/?[a-z][^\]]*\]", "", text)   # remove rich markup tags
-    text = text.replace("[", r"\[")                  # re-escape remaining [ (grammar notes)
+    text = text.replace(r"\[", "[")                          # unescape \[ → [
+    text = re.sub(r"\[/?[a-z][a-z0-9 _#()]*\]", "", text)  # remove rich markup tags only
+    text = text.replace("[", r"\[")                          # re-escape remaining [ (grammar notes)
     return text
 
 
