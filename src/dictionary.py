@@ -1,6 +1,43 @@
 import bisect
+import html
+import re
 import struct
 from pathlib import Path
+
+_K_TAG_RE = re.compile(r"<k>([^<]*)</k>")
+_PREAMBLE_B_RE = re.compile(r"<b>([^<]+)</b>")
+_ROMAN_RE = re.compile(r"^[IVX]+$")
+
+
+def _extract_variants(raw: str) -> list[str]:
+    """Extract inflected variant forms from a StarDict/XDXF entry.
+
+    Tries two strategies:
+    1. Additional <k> tags after the first (standard XDXF).
+    2. <b>form1, form2</b><i>,</i> <b>form3</b> pattern in the preamble
+       (Collins COBUILD style — variants listed before the first <dtrn>).
+    """
+    # Strategy 1: extra <k> tags
+    headwords = _K_TAG_RE.findall(raw)
+    variants = [html.unescape(hw).strip() for hw in headwords[1:] if hw.strip()]
+    if variants:
+        return variants
+
+    # Strategy 2: <b> tags before the first <dtrn> (Collins style)
+    cut = raw.find("<dtrn>")
+    preamble = raw[:cut] if cut >= 0 else raw[:500]
+    preamble = _K_TAG_RE.sub("", preamble)  # drop headword tag itself
+
+    for m in _PREAMBLE_B_RE.finditer(preamble):
+        text = html.unescape(m.group(1)).strip()
+        if not text or _ROMAN_RE.match(text):
+            continue
+        for word in re.split(r",\s*", text):
+            word = word.strip()
+            if word and not _ROMAN_RE.match(word):
+                variants.append(word)
+
+    return variants
 
 
 class StarDictIfo:
@@ -91,9 +128,31 @@ class StarDict:
         self._dict = StarDictDict(dict_files[0])
         self.bookname = ifo.bookname
         self.valid = True
+        self._variant_index: dict[str, tuple[int, int]] = {}
+        self._build_variant_index()
+
+    def _build_variant_index(self) -> None:
+        """Scan all dict entries and map variant forms → (offset, size).
+
+        Deduplicates by offset so each physical entry is processed once.
+        Exact-match idx entries always take priority over the variant index
+        (the variant index is only consulted when idx.lookup() misses).
+        """
+        seen: set[int] = set()
+        for _, offset, size in self._idx._entries:
+            if offset in seen:
+                continue
+            seen.add(offset)
+            raw = self._dict.read(offset, size)
+            for variant in _extract_variants(raw):
+                key = variant.lower()
+                if key not in self._variant_index:
+                    self._variant_index[key] = (offset, size)
 
     def lookup(self, word: str) -> str | None:
         result = self._idx.lookup(word)
+        if result is None:
+            result = self._variant_index.get(word.lower())
         if result is None:
             return None
         offset, size = result
