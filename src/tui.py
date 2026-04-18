@@ -392,13 +392,15 @@ def wait_for_navigation(results: list[tuple[str, str]]) -> None:
         if total_sections > 1:
             nav_parts.append(
                 f"Section {current_section + 1}/{total_sections}  "
-                f"({'↑ prev  ' if current_section > 0 else ''}"
+                f"({'↑ prev' if current_section > 0 else ''}"
+                f"{'  ' if (current_section > 0 and current_section < total_sections - 1) else ''}"
                 f"{'↓ next' if current_section < total_sections - 1 else ''})"
             )
         if total_pages > 1:
             nav_parts.append(
                 f"Page {current_page + 1}/{total_pages}  "
-                f"({'[ prev  ' if current_page > 0 else ''}"
+                f"({'[ prev' if current_page > 0 else ''}"
+                f"{'  ' if (current_page > 0 and current_page < total_pages - 1) else ''}"
                 f"{'] next' if current_page < total_pages - 1 else ''})"
             )
         if nav_parts:
