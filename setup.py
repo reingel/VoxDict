@@ -7,6 +7,7 @@ setup(
     install_requires=[
         "rich>=13.0",
         "readchar>=4.0",
+        "pyyaml>=6.0",
     ],
     entry_points={
         "console_scripts": [

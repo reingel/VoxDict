@@ -14,6 +14,7 @@ from rich.text import Text
 import readchar
 
 from .dictionary import DictionaryManager
+from .history import HistoryManager, ITEMS_PER_PAGE
 
 console = Console()
 
@@ -466,6 +467,121 @@ def wait_for_navigation(results: list[tuple[str, str]]) -> None:
                     status_msg = f"Speaking {key}..."
 
 
+def _search_screen(
+    manager: DictionaryManager,
+    history: HistoryManager,
+    show_dict_info: bool = False,
+) -> str | None:
+    """Interactive search screen with history navigation. Returns word to search or None (quit)."""
+    buffer = ""
+    hist_cursor: int | None = None
+    hist_page = 0
+    blink_on = True
+    blink_tick = 0
+
+    sys.stdout.write("\033[?25l")  # hide terminal cursor
+    sys.stdout.flush()
+    try:
+        while True:
+            recent = history.recent_unique(200)
+            total_pages = max(1, (len(recent) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
+            hist_page = min(hist_page, total_pages - 1)
+            page_items = recent[hist_page * ITEMS_PER_PAGE : (hist_page + 1) * ITEMS_PER_PAGE]
+            if hist_cursor is not None:
+                hist_cursor = min(hist_cursor, len(page_items) - 1)
+
+            clear()
+            draw_header()
+
+            if show_dict_info:
+                dict_names = "  |  ".join(d.bookname for d in manager._dicts)
+                console.print(
+                    f"\n[dim cyan]{dict_names}[/dim cyan]\n"
+                    f"[dim]{manager.count} dictionar{'y' if manager.count == 1 else 'ies'} loaded.[/dim]"
+                )
+
+            caret = "_" if blink_on else " "
+            console.print(f"\nSearch: {buffer}{caret}", highlight=False)
+
+            if page_items:
+                console.rule(style="dim")
+                for i, word in enumerate(page_items):
+                    if hist_cursor == i:
+                        console.print(f" [bold magenta]▶[/bold magenta] {word}", highlight=False)
+                    else:
+                        console.print(f"[dim]   {word}[/dim]", highlight=False)
+
+                hint_parts = []
+                if total_pages > 1:
+                    hint_parts.append(
+                        f"Page {hist_page + 1}/{total_pages}"
+                        + ("  [ prev" if hist_page > 0 else "")
+                        + ("  ] next" if hist_page < total_pages - 1 else "")
+                    )
+                hint_parts.append("Enter: search  ESC: cancel")
+                console.print("\n[dim]" + "  |  ".join(hint_parts) + "[/dim]")
+
+            key: str | None = None
+            while key is None:
+                key = _read_key_timeout(0.1)
+                if key is None:
+                    blink_tick += 1
+                    if blink_tick >= 5:  # toggle every ~500ms
+                        blink_tick = 0
+                        blink_on = not blink_on
+                        break  # redraw to update blink
+
+            if key is None:
+                continue
+
+            if key == "\x04":
+                return None
+            elif key == readchar.key.DOWN:
+                if hist_cursor is None:
+                    if page_items:
+                        hist_cursor = 0
+                elif hist_cursor < len(page_items) - 1:
+                    hist_cursor += 1
+                elif hist_page < total_pages - 1:
+                    hist_page += 1
+                    hist_cursor = 0
+            elif key == readchar.key.UP:
+                if hist_cursor is None:
+                    pass
+                elif hist_cursor == 0:
+                    if hist_page > 0:
+                        hist_page -= 1
+                        hist_cursor = ITEMS_PER_PAGE - 1
+                    else:
+                        hist_cursor = None
+                else:
+                    hist_cursor -= 1
+            elif key == "]":
+                if hist_page < total_pages - 1:
+                    hist_page += 1
+                hist_cursor = None
+            elif key == "[":
+                if hist_page > 0:
+                    hist_page -= 1
+                hist_cursor = None
+            elif key in ("\r", "\n"):
+                if hist_cursor is not None and hist_cursor < len(page_items):
+                    return page_items[hist_cursor]
+                if buffer:
+                    return buffer
+            elif key.startswith("\x1b"):
+                hist_cursor = None
+            elif key in ("\x7f", "\x08"):
+                buffer = buffer[:-1]
+                hist_cursor = None
+            elif len(key) == 1 and key.isprintable():
+                buffer += key
+                hist_cursor = None
+    finally:
+        sys.stdout.write("\033[?25h")  # restore terminal cursor
+        sys.stdout.flush()
+
+
 def main():
     base_dir = Path(__file__).parent.parent
     dict_dir = base_dir / "Dictionaries"
@@ -477,26 +593,15 @@ def main():
         console.print(f"[dim]Path: {dict_dir}[/dim]")
         sys.exit(1)
 
+    history = HistoryManager()
     first_run = True
     while True:
-        clear()
-        draw_header()
-        if first_run:
-            dict_names = "  |  ".join(d.bookname for d in manager._dicts)
-            console.print(
-                f"\n[dim cyan]{dict_names}[/dim cyan]\n"
-                f"[dim]{manager.count} dictionar{'y' if manager.count == 1 else 'ies'} loaded.[/dim]\n"
-            )
-            first_run = False
+        word = _search_screen(manager, history, show_dict_info=first_run)
+        first_run = False
 
-        try:
-            word = input("\nSearch: ").strip()
-        except (EOFError, KeyboardInterrupt):
+        if word is None:
             console.print("\n[dim]Exiting.[/dim]")
             break
-
-        if not word:
-            continue
 
         results = manager.search_all(word)
 
@@ -510,4 +615,5 @@ def main():
                 break
             continue
 
+        history.add(word)
         wait_for_navigation(results)
