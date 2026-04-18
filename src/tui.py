@@ -479,6 +479,7 @@ def _search_screen(
     hist_page = 0
     blink_on = True
     blink_tick = 0
+    quit_confirm = False
 
     sys.stdout.write("\033[?25l")  # hide terminal cursor
     sys.stdout.flush()
@@ -501,14 +502,18 @@ def _search_screen(
                     f"[dim]{manager.count} dictionar{'y' if manager.count == 1 else 'ies'} loaded.[/dim]"
                 )
 
-            if hist_cursor is not None:
+            if quit_confirm:
+                console.print("\nSearch: [bold]Quit? \[Y/N][/bold]", highlight=False)
+            elif hist_cursor is not None:
                 display = buffer
+                console.print(f"\nSearch: {display}", highlight=False)
             elif cursor_pos < len(buffer):
                 caret = "_" if blink_on else buffer[cursor_pos]
                 display = buffer[:cursor_pos] + caret + buffer[cursor_pos + 1:]
+                console.print(f"\nSearch: {display}", highlight=False)
             else:
                 display = buffer + ("_" if blink_on else "")
-            console.print(f"\nSearch: {display}", highlight=False)
+                console.print(f"\nSearch: {display}", highlight=False)
 
             if page_items:
                 console.rule(style="dim")
@@ -527,6 +532,16 @@ def _search_screen(
                     )
                 hint_parts.append("Enter: search  ESC: cancel")
                 console.print("\n[dim]" + "  |  ".join(hint_parts) + "[/dim]")
+
+            if quit_confirm:
+                key = None
+                while key is None:
+                    key = _read_key_timeout(0.1)
+                if key and key.lower() == "y":
+                    return None
+                else:
+                    quit_confirm = False
+                continue
 
             key: str | None = None
             while key is None:
@@ -594,6 +609,13 @@ def _search_screen(
                 while cursor_pos > 0 and buffer[cursor_pos - 1] != " ":
                     cursor_pos -= 1
                 hist_cursor = None
+            elif key == "\x1b":  # bare ESC only
+                hist_cursor = None
+                if buffer:
+                    buffer = ""
+                    cursor_pos = 0
+                else:
+                    quit_confirm = True
             elif key.startswith("\x1b"):
                 hist_cursor = None
             elif key in ("\x7f", "\x08"):
