@@ -474,6 +474,7 @@ def _search_screen(
 ) -> str | None:
     """Interactive search screen with history navigation. Returns word to search or None (quit)."""
     buffer = ""
+    cursor_pos = 0
     hist_cursor: int | None = None
     hist_page = 0
     blink_on = True
@@ -500,8 +501,14 @@ def _search_screen(
                     f"[dim]{manager.count} dictionar{'y' if manager.count == 1 else 'ies'} loaded.[/dim]"
                 )
 
-            caret = "_" if blink_on else " "
-            console.print(f"\nSearch: {buffer}{caret}", highlight=False)
+            if hist_cursor is not None:
+                display = buffer
+            elif cursor_pos < len(buffer):
+                caret = "_" if blink_on else buffer[cursor_pos]
+                display = buffer[:cursor_pos] + caret + buffer[cursor_pos + 1:]
+            else:
+                display = buffer + ("_" if blink_on else "")
+            console.print(f"\nSearch: {display}", highlight=False)
 
             if page_items:
                 console.rule(style="dim")
@@ -569,13 +576,34 @@ def _search_screen(
                     return page_items[hist_cursor]
                 if buffer:
                     return buffer
+            elif key in (readchar.key.RIGHT, "\x1b[C"):
+                cursor_pos = min(len(buffer), cursor_pos + 1)
+                hist_cursor = None
+            elif key in (readchar.key.LEFT, "\x1b[D"):
+                cursor_pos = max(0, cursor_pos - 1)
+                hist_cursor = None
+            elif key in ("\x1bf", "\x1b[1;3C"):  # option+right: word forward
+                while cursor_pos < len(buffer) and buffer[cursor_pos] == " ":
+                    cursor_pos += 1
+                while cursor_pos < len(buffer) and buffer[cursor_pos] != " ":
+                    cursor_pos += 1
+                hist_cursor = None
+            elif key in ("\x1bb", "\x1b[1;3D"):  # option+left: word backward
+                while cursor_pos > 0 and buffer[cursor_pos - 1] == " ":
+                    cursor_pos -= 1
+                while cursor_pos > 0 and buffer[cursor_pos - 1] != " ":
+                    cursor_pos -= 1
+                hist_cursor = None
             elif key.startswith("\x1b"):
                 hist_cursor = None
             elif key in ("\x7f", "\x08"):
-                buffer = buffer[:-1]
+                if cursor_pos > 0:
+                    buffer = buffer[:cursor_pos - 1] + buffer[cursor_pos:]
+                    cursor_pos -= 1
                 hist_cursor = None
             elif len(key) == 1 and key.isprintable():
-                buffer += key
+                buffer = buffer[:cursor_pos] + key + buffer[cursor_pos:]
+                cursor_pos += 1
                 hist_cursor = None
     finally:
         sys.stdout.write("\033[?25h")  # restore terminal cursor
