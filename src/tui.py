@@ -477,15 +477,20 @@ def main():
         console.print(f"[dim]Path: {dict_dir}[/dim]")
         sys.exit(1)
 
+    first_run = True
     while True:
         clear()
         draw_header()
-        console.print(
-            f"\n[dim]{manager.count} dictionar{'y' if manager.count == 1 else 'ies'} loaded.[/dim]\n"
-        )
+        if first_run:
+            dict_names = "  |  ".join(d.bookname for d in manager._dicts)
+            console.print(
+                f"\n[dim cyan]{dict_names}[/dim cyan]\n"
+                f"[dim]{manager.count} dictionar{'y' if manager.count == 1 else 'ies'} loaded.[/dim]\n"
+            )
+            first_run = False
 
         try:
-            word = input("Search: ").strip()
+            word = input("\nSearch: ").strip()
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]Exiting.[/dim]")
             break
